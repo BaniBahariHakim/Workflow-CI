@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  CSV_URL: https://raw.githubusercontent.com/BaniBahariHakim/Eksperimen_SML_BaniBahariHakim/main/winequality_preprocessing.csv
+  DAGSHUB_REPO_OWNER: ${{ secrets.DAGSHUB_REPO_OWNER }}
+  DAGSHUB_REPO_NAME: ${{ secrets.DAGSHUB_REPO_NAME }}
+  DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+  DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+  MLFLOW_TRACKING_URI: https://dagshub.com/${{ secrets.DAGSHUB_REPO_OWNER }}/${{ secrets.DAGSHUB_REPO_NAME }}.mlflow
+  MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_REPO_OWNER }}
+  MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python 3.12.7
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12.7'
+
+      - name: Check Env
+        run: |
+          echo "DAGSHUB_REPO_OWNER: $DAGSHUB_REPO_OWNER"
+          echo "DAGSHUB_REPO_NAME: $DAGSHUB_REPO_NAME"
+          echo "DOCKER_HUB_USERNAME: $DOCKER_HUB_USERNAME"
+          echo "MLFLOW_TRACKING_URI: $MLFLOW_TRACKING_URI"
+
+      - name: Install dependencies
+        run: |
+          pip install -U -q pip
+          pip install -r requirements.txt
+
+      - name: Run MLflow project
+        run: |
+          mkdir -p MLproject/preprocessing
+          curl -L -o MLproject/preprocessing/train.csv ${{ env.CSV_URL }}
+          MLFLOW_OUTPUT=$(mlflow run MLproject --entry-point tune --env-manager=local -P dataset="preprocessing/train.csv" 2>&1)
+          echo "$MLFLOW_OUTPUT"
+          RUN_ID=$(echo "$MLFLOW_OUTPUT" | grep -oP "run with ID '\K[a-f0-9]{32}")
+          echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
+          echo "Latest run_id: $RUN_ID"
+
+      - name: Install Python dependencies
+        run: |
+          pip install joblib
+
+      - name: Upload to Github LFS
+        run: |
+          sudo apt-get update && sudo apt-get install -y git-lfs
+          git lfs install
+          mlflow artifacts download --artifact-uri "runs:/$RUN_ID/confusion_matrix.png" --dst-path .
+          mlflow artifacts download --artifact-uri "runs:/$RUN_ID/feature_importances.json" --dst-path .
+          git lfs track "*.png" "*.json"
+          git add .gitattributes confusion_matrix.png feature_importances.json
+          git commit -m "Add latest evaluation artifacts from CI" || echo "No changes"
+          git push
+
+      - name: Build Docker Model
+        run: |
+          mlflow models build-docker \
+            --model-uri "runs:/$RUN_ID/model" \
+            --name "cc" \
+            --env-manager local
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ env.DOCKER_HUB_USERNAME }}
+          password: ${{ env.DOCKER_HUB_TOKEN }}
+
+      - name: Tag Docker Image
+        run: docker tag cc ${{ env.DOCKER_HUB_USERNAME }}/cc:latest
+
+      - name: Push Docker Image
+        run: docker push ${{ env.DOCKER_HUB_USERNAME }}/cc:latest

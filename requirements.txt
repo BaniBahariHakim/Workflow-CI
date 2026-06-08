@@ -1,0 +1,9 @@
+dagshub
+mlflow==2.19.0
+cloudpickle
+numpy
+pandas
+psutil
+scikit-learn
+scipy
+matplotlib

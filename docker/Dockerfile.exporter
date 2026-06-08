@@ -1,0 +1,14 @@
+# Dockerfile.exporter
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies first (better Docker layer caching)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY prometheus_exporter.py .
+
+EXPOSE 8000
+
+CMD ["python", "prometheus_exporter.py"]
